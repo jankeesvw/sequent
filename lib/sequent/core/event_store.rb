@@ -63,16 +63,10 @@ module Sequent
         stream = find_event_stream(aggregate_id)
         fail ArgumentError, 'no stream found for this aggregate' if stream.blank?
 
-        q = Sequent
-          .configuration
-          .event_record_class
-          .where(aggregate_id: aggregate_id)
-          .where.not(event_type: Sequent.configuration.snapshot_event_class.name)
-          .order(:sequence_number)
-        q = q.where('created_at < ?', load_until) if load_until.present?
+        query = aggregates_query([aggregate_id], false, load_until)
         has_events = false
 
-        q.select('event_type, event_json').each_row do |event_hash|
+        connection.select_all(query).each do |event_hash|
           has_events = true
           event = deserialize_event(event_hash)
           block.call([stream, event])
@@ -94,7 +88,7 @@ module Sequent
         streams = Sequent.configuration.stream_record_class.where(aggregate_id: aggregate_ids)
 
         query = aggregates_query(aggregate_ids)
-        events = Sequent.configuration.event_record_class.connection.select_all(query).map do |event_hash|
+        events = connection.select_all(query).map do |event_hash|
           deserialize_event(event_hash)
         end
 
@@ -110,11 +104,11 @@ module Sequent
         end
       end
 
-      def aggregates_query(aggregate_ids)
+      def aggregates_query(aggregate_ids, use_snapshots = true, load_until = nil)
         <<~SQL.chomp
           (
           SELECT event_type, event_json
-            FROM load_events(#{quote(aggregate_ids.to_json)}, #{quote Sequent.configuration.snapshot_event_class.name}, TRUE)
+            FROM load_events(#{quote(aggregate_ids.to_json)}, #{quote Sequent.configuration.snapshot_event_class.name}, #{use_snapshots}, #{load_until.present? ? quote(load_until) : "NULL"})
           )
         SQL
       end
@@ -188,7 +182,7 @@ module Sequent
            LIMIT #{quote limit}
            FOR UPDATE
         SQL
-        Sequent.configuration.event_record_class.connection.select_all(query).map { |x| x['aggregate_id'] }
+        connection.select_all(query).map { |x| x['aggregate_id'] }
       end
 
       def find_event_stream(aggregate_id)
@@ -197,6 +191,10 @@ module Sequent
       end
 
       private
+
+      def connection
+        Sequent.configuration.event_record_class.connection
+      end
 
       def column_names
         @column_names ||= Sequent
@@ -243,7 +241,6 @@ module Sequent
             end
           end
         end
-        connection = Sequent.configuration.event_record_class.connection
         values = event_records
           .map { |r| "(#{column_names.map { |c| connection.quote(r[c.to_sym]) }.join(',')})" }
           .join(',')
