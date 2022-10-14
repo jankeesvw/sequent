@@ -52,9 +52,8 @@ module Sequent
 
         Sequent.configuration.event_record_class
           .select('event_type, event_json')
-          .joins("INNER JOIN #{stream_records} ON #{event_records}.stream_record_id = #{stream_records}.id")
           .where("event_type <> #{snapshot_event_type}")
-          .order!("#{stream_records}.id, #{event_records}.sequence_number")
+          .order!("stream_record_id, sequence_number")
       end
     end
   end
